@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>PrivateGram</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- モジュールのインポート設定 -->
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.2.0",
+      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+      "lucide-react": "https://esm.sh/lucide-react@0.292.0",
+      "firebase/app": "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js",
+      "firebase/auth": "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js",
+      "firebase/firestore": "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js"
+    }
+  }
+  </script>
+  
+  <!-- Babel (ブラウザでReactを動かすためのツール) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
+  </style>
+</head>
+<body class="bg-gray-100">
+  <!-- アプリの表示領域 -->
+  <div id="root"></div>
+
+  <!-- アプリのメインプログラム -->
+  <script type="text/babel" data-type="module">
+    import React, { useState, useEffect } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { Home, PlusSquare, Users, Heart, MessageCircle, Send, Bookmark, ChevronLeft, Image as ImageIcon, Loader2, Trash2, Settings, AlertCircle } from 'lucide-react';
+    
+    // Firebaseの設定と初期化
+    import { initializeApp } from 'firebase/app';
+    import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, linkWithRedirect, signInWithRedirect, getRedirectResult } from 'firebase/auth';
+    import { getFirestore, collection, onSnapshot, addDoc, doc, deleteDoc } from 'firebase/firestore';
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyB4fWICOUMlFOWI7mmyprnJJ0gE4CRkcl8",
+      authDomain: "private-gram-8eafb.firebaseapp.com",
+      projectId: "private-gram-8eafb",
+      storageBucket: "private-gram-8eafb.firebasestorage.app",
+      messagingSenderId: "870927243622",
+      appId: "1:870927243622:web:3ba39e8cab57f9d73490a7"
+    };
+    
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const appId = "private-gram-web";
+
+    // アプリ本体のコンポーネント
+    function PrivateInstagram() {
+      const [user, setUser] = useState(null);
+      const [authLoading, setAuthLoading] = useState(true);
+      const [authError, setAuthError] = useState(null);
+
+      const [accounts, setAccounts] = useState([]);
+      const [posts, setPosts] = useState([]);
+      const [currentTab, setCurrentTab] = useState('settings');
+      const [viewingProfileId, setViewingProfileId] = useState(null);
+
+      const [newAccountName, setNewAccountName] = useState('');
+      const [newAccountBio, setNewAccountBio] = useState('');
+      const [newAccountAvatar, setNewAccountAvatar] = useState('');
+      
+      const [postAccountId, setPostAccountId] = useState('');
+      const [postImageUrl, setPostImageUrl] = useState('');
+      const [postCaption, setPostCaption] = useState('');
+      const [isSubmitting, setIsSubmitting] = useState(false);
+
+      const [deleteTarget, setDeleteTarget] = useState(null);
+      const [authMessage, setAuthMessage] = useState('');
+      const [now, setNow] = useState(Date.now());
+
+      useEffect(() => {
+        const timer = setInterval(() => setNow(Date.now()), 2000);
+        return () => clearInterval(timer);
+      }, []);
+
+      useEffect(() => {
+        const initAuth = async () => {
+          try {
+            const result = await getRedirectResult(auth);
+            if (result) {
+              setAuthMessage("✓ Googleアカウントとの連携が完了しました！");
+            } else if (!auth.currentUser) {
+              await signInAnonymously(auth);
+            }
+          } catch (error) {
+            console.error("Auth error:", error);
+            if (error.code === 'auth/credential-already-in-use') {
+               signInWithRedirect(auth, new GoogleAuthProvider());
+            } else {
+               setAuthError(error.message);
+            }
+            setAuthLoading(false);
+          }
+        };
+
+        const unsubscribe = onAuthStateChanged(auth, (u) => {
+          setUser(u);
+          setAuthLoading(false);
+        });
+
+        initAuth();
+        return () => unsubscribe();
+      }, []);
+
+      const currentUserUid = user ? user.uid : 'guest_user';
+
+      useEffect(() => {
+        if (authLoading) return;
+        const accountsRef = collection(db, 'artifacts', appId, 'users', currentUserUid, 'accounts');
+        const unsubAccounts = onSnapshot(accountsRef, (snapshot) => {
+          const accs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          accs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          setAccounts(accs);
+          if (accs.length > 0 && !postAccountId) setPostAccountId(accs[0].id);
+        }, (error) => setAuthError("データベース読み込みエラー: " + error.message));
+
+        const postsRef = collection(db, 'artifacts', appId, 'users', currentUserUid, 'posts');
+        const unsubPosts = onSnapshot(postsRef, (snapshot) => {
+          const psts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          psts.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          setPosts(psts);
+        }, (error) => console.error("Posts fetch error:", error));
+
+        return () => { unsubAccounts(); unsubPosts(); };
+      }, [currentUserUid, authLoading]);
+
+      const handleCreateAccount = async (e) => {
+        e.preventDefault();
+        if (!newAccountName.trim()) return;
+        setIsSubmitting(true);
+        try {
+          const avatar = newAccountAvatar.trim() || `https://api.dicebear.com/7.x/avataaars/svg?seed=${newAccountName}`;
+          await addDoc(collection(db, 'artifacts', appId, 'users', currentUserUid, 'accounts'), {
+            username: newAccountName.trim(),
+            bio: newAccountBio.trim(),
+            avatarUrl: avatar,
+            createdAt: Date.now()
+          });
+          setNewAccountName(''); setNewAccountBio(''); setNewAccountAvatar(''); setAuthError(null);
+        } catch (error) { setAuthError("保存エラー: " + error.message); }
+        setIsSubmitting(false);
+      };
+
+      const handleCreatePost = async (e) => {
+        e.preventDefault();
+        if (!postAccountId) return;
+        setIsSubmitting(true);
+        try {
+          const image = postImageUrl.trim() || `https://picsum.photos/seed/${Date.now()}/600/600`;
+          const engagementRate = 0.5 + (Math.random() * 2.5);
+          const likeRatio = 0.05 + (Math.random() * 0.2);
+          await addDoc(collection(db, 'artifacts', appId, 'users', currentUserUid, 'posts'), {
+            accountId: postAccountId,
+            imageUrl: image,
+            caption: postCaption.trim(),
+            engagementRate,
+            likeRatio,
+            createdAt: Date.now()
+          });
+          setPostImageUrl(''); setPostCaption(''); setCurrentTab('home');
+        } catch (error) { setAuthError("保存エラー: " + error.message); }
+        setIsSubmitting(false);
+      };
+
+      const executeDelete = async () => {
+        if (!deleteTarget) return;
+        try {
+          if (deleteTarget.type === 'post') {
+            await deleteDoc(doc(db, 'artifacts', appId, 'users', currentUserUid, 'posts', deleteTarget.id));
+          } else if (deleteTarget.type === 'account') {
+            await deleteDoc(doc(db, 'artifacts', appId, 'users', currentUserUid, 'accounts', deleteTarget.id));
+            if (viewingProfileId === deleteTarget.id) setViewingProfileId(null);
+          }
+        } catch (error) { setAuthError("削除エラー: " + error.message); }
+        setDeleteTarget(null);
+      };
+
+      const handleGoogleAuth = async () => {
+        setAuthMessage("Googleのログイン画面へ移動します...");
+        const provider = new GoogleAuthProvider();
+        try {
+          if (auth.currentUser && auth.currentUser.isAnonymous) {
+            await linkWithRedirect(auth.currentUser, provider);
+          } else {
+            await signInWithRedirect(auth, provider);
+          }
+        } catch (error) {
+          setAuthMessage("エラーが発生しました: " + error.message);
+        }
+      };
+
+      const calculateDynamicStats = (post) => {
+        if (!post.createdAt) return { views: 0, likes: 0 };
+        const elapsedSeconds = Math.max(0, (now - post.createdAt) / 1000);
+        const views = Math.floor(elapsedSeconds * 2 * (post.engagementRate || 1.0));
+        const likes = Math.floor(views * (post.likeRatio || 0.15));
+        return { views, likes };
+      };
+
+      const formatTimeAgo = (timestamp) => {
+        if (!timestamp) return 'Just now';
+        const seconds = Math.floor((now - timestamp) / 1000);
+        if (seconds < 60) return `${seconds}秒前`;
+        const minutes = Math.floor(seconds / 60);
+        if (minutes < 60) return `${minutes}分前`;
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return `${hours}時間前`;
+        return `${Math.floor(hours / 24)}日前`;
+      };
+
+      const formatNumber = (num) => {
+        if (num >= 10000) return (num / 10000).toFixed(1) + '万';
+        return num.toLocaleString();
+      };
+
+      if (authLoading) {
+        return (
+          <div className="min-h-screen flex items-center justify-center bg-gray-50">
+            <Loader2 className="w-8 h-8 animate-spin text-gray-500" />
+          </div>
+        );
+      }
+
+      const viewingProfile = viewingProfileId ? accounts.find(a => a.id === viewingProfileId) : null;
+      const profilePosts = viewingProfile ? posts.filter(p => p.accountId === viewingProfile.id) : [];
+
+      return (
+        <div className="min-h-screen bg-gray-100 flex justify-center font-sans text-gray-900">
+          <div className="w-full max-w-md bg-white min-h-screen shadow-xl flex flex-col relative overflow-hidden">
+            
+            <header className="h-14 border-b border-gray-200 flex items-center justify-between px-4 bg-white z-10 shrink-0">
+              {viewingProfileId ? (
+                <>
+                  <button onClick={() => setViewingProfileId(null)} className="p-2 -ml-2"><ChevronLeft className="w-6 h-6" /></button>
+                  <h1 className="font-bold text-lg">{viewingProfile?.username}</h1>
+                  <div className="w-6" />
+                </>
+              ) : (
+                <>
+                  <h1 className="font-bold text-xl tracking-tight">PrivateGram</h1>
+                  <div className="flex gap-4">
+                    <Heart className="w-6 h-6" />
+                    <MessageCircle className="w-6 h-6" />
+                  </div>
+                </>
+              )}
+            </header>
+
+            {authError && (
+              <div className="bg-red-50 border-b border-red-200 px-4 py-2 flex items-start gap-2 text-red-700 text-xs shrink-0">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold mb-1">エラーが発生しました</p>
+                  <p className="break-all">{authError}</p>
+                </div>
+              </div>
+            )}
+
+            <main className="flex-1 overflow-y-auto pb-16 bg-gray-50">
+              {viewingProfileId && viewingProfile ? (
+                <div className="bg-white min-h-full">
+                  <div className="px-4 py-6 flex items-center gap-6">
+                    <img src={viewingProfile.avatarUrl} alt="" className="w-20 h-20 rounded-full border border-gray-200 object-cover" />
+                    <div className="flex flex-1 justify-around text-center">
+                      <div><div className="font-bold text-lg">{profilePosts.length}</div><div className="text-xs text-gray-500">投稿</div></div>
+                      <div><div className="font-bold text-lg">{formatNumber(profilePosts.reduce((acc, p) => acc + calculateDynamicStats(p).views, 0))}</div><div className="text-xs text-gray-500">総閲覧</div></div>
+                    </div>
+                  </div>
+                  <div className="px-4 pb-4 border-b border-gray-200 text-sm">
+                    <p className="font-semibold">{viewingProfile.username}</p>
+                    <p className="whitespace-pre-wrap mt-1">{viewingProfile.bio}</p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-0.5 mt-0.5">
+                    {profilePosts.map(post => (
+                      <div key={post.id} className="aspect-square bg-gray-200 relative group">
+                        <img src={post.imageUrl} alt="" className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-black/40 opacity-0 hover:opacity-100 flex items-center justify-center text-white text-sm font-semibold transition-opacity">
+                          <Heart className="w-4 h-4 mr-1 fill-white" />
+                          {formatNumber(calculateDynamicStats(post).likes)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {profilePosts.length === 0 && <div className="text-center text-gray-400 mt-12 text-sm">まだ投稿がありません</div>}
+                </div>
+              ) : (
+                <>
+                  {currentTab === 'home' && (
+                    <div className="bg-white min-h-full">
+                      {posts.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center pt-20 text-gray-400">
+                          <ImageIcon className="w-12 h-12 mb-4 opacity-50" />
+                          <p>まだ投稿がありません</p>
+                          <button onClick={() => setCurrentTab('newPost')} className="mt-4 text-blue-500 font-semibold">最初の投稿を作成する</button>
+                        </div>
+                      ) : (
+                        posts.map(post => {
+                          const account = accounts.find(a => a.id === post.accountId);
+                          const { views, likes } = calculateDynamicStats(post);
+                          return (
+                            <article key={post.id} className="border-b border-gray-100 pb-4 mb-2">
+                              <div className="flex items-center gap-3 p-3">
+                                <button onClick={() => setViewingProfileId(post.accountId)} className="flex items-center gap-2">
+                                  <img src={account?.avatarUrl || 'https://api.dicebear.com/7.x/avataaars/svg?seed=fallback'} alt="" className="w-8 h-8 rounded-full border border-gray-200 object-cover"/>
+                                  <span className="font-semibold text-sm">{account?.username || 'Unknown'}</span>
+                                </button>
+                                <span className="text-xs text-gray-400 ml-auto">{formatTimeAgo(post.createdAt)}</span>
+                                <button onClick={() => setDeleteTarget({ id: post.id, type: 'post' })} className="p-1 text-gray-400 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                              </div>
+                              <div className="bg-gray-100 aspect-square w-full">
+                                <img src={post.imageUrl} alt="" className="w-full h-full object-cover" loading="lazy" />
+                              </div>
+                              <div className="px-3 pt-3 flex justify-between items-center">
+                                <div className="flex gap-4"><Heart className={`w-6 h-6 ${likes > 0 ? 'fill-red-500 text-red-500' : 'text-gray-800'}`} /><MessageCircle className="w-6 h-6" /><Send className="w-6 h-6" /></div>
+                                <Bookmark className="w-6 h-6" />
+                              </div>
+                              <div className="px-3 pt-2">
+                                <div className="font-semibold text-sm mb-1">{formatNumber(likes)}件のいいね <span className="text-gray-400 font-normal ml-2">({formatNumber(views)} 回表示)</span></div>
+                                {post.caption && <div className="text-sm"><span className="font-semibold mr-2 cursor-pointer" onClick={() => setViewingProfileId(post.accountId)}>{account?.username}</span>{post.caption}</div>}
+                              </div>
+                            </article>
+                          )
+                        })
+                      )}
+                    </div>
+                  )}
+
+                  {currentTab === 'newPost' && (
+                    <div className="p-4 bg-white min-h-full">
+                      <h2 className="text-xl font-bold mb-6 text-center">新規投稿</h2>
+                      {accounts.length === 0 ? (
+                        <div className="text-center p-6 bg-gray-50 rounded-lg border">
+                          <p className="text-gray-500 mb-4">まずはアカウントを作成してください</p>
+                          <button onClick={() => setCurrentTab('accounts')} className="bg-blue-500 text-white px-4 py-2 rounded-lg font-semibold">アカウント管理へ</button>
+                        </div>
+                      ) : (
+                        <form onSubmit={handleCreatePost} className="space-y-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">投稿アカウント</label>
+                            <select className="w-full border rounded-lg p-3 bg-gray-50" value={postAccountId} onChange={(e) => setPostAccountId(e.target.value)} required>
+                              {accounts.map(acc => <option key={acc.id} value={acc.id}>{acc.username}</option>)}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">画像URL (任意)</label>
+                            <input type="url" placeholder="空の場合はランダムな画像が適用されます" className="w-full border rounded-lg p-3 bg-gray-50" value={postImageUrl} onChange={(e) => setPostImageUrl(e.target.value)}/>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">キャプション</label>
+                            <textarea rows="4" className="w-full border rounded-lg p-3 bg-gray-50" placeholder="キャプションを書く..." value={postCaption} onChange={(e) => setPostCaption(e.target.value)}/>
+                          </div>
+                          <button type="submit" disabled={isSubmitting} className="w-full bg-blue-500 text-white font-bold py-3 rounded-lg hover:bg-blue-600 disabled:opacity-50 mt-4">{isSubmitting ? '投稿中...' : 'シェアする'}</button>
+                        </form>
+                      )}
+                    </div>
+                  )}
+
+                  {currentTab === 'accounts' && (
+                    <div className="p-4 bg-gray-50 min-h-full space-y-6">
+                      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                        <h3 className="font-bold text-gray-800 mb-4">あなたのアカウント一覧</h3>
+                        {accounts.length === 0 ? <p className="text-sm text-gray-400 text-center py-4">アカウントがありません</p> : (
+                          <div className="space-y-3">
+                            {accounts.map(acc => (
+                              <div key={acc.id} className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded-lg group">
+                                <div className="flex-1 flex items-center gap-3 cursor-pointer" onClick={() => setViewingProfileId(acc.id)}>
+                                  <img src={acc.avatarUrl} alt="" className="w-12 h-12 rounded-full border border-gray-200" />
+                                  <div>
+                                    <div className="font-bold text-sm">{acc.username}</div>
+                                    <div className="text-xs text-gray-500 truncate w-48">{acc.bio || '自己紹介なし'}</div>
+                                  </div>
+                                </div>
+                                <button onClick={() => setDeleteTarget({ id: acc.id, type: 'account' })} className="p-2 text-gray-300 hover:text-red-500"><Trash2 className="w-5 h-5" /></button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                        <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><PlusSquare className="w-5 h-5" /> 新しいアカウントを作成</h3>
+                        <form onSubmit={handleCreateAccount} className="space-y-3">
+                          <input type="text" placeholder="ユーザー名 (必須)" required className="w-full border rounded-lg p-2.5 text-sm bg-gray-50" value={newAccountName} onChange={(e) => setNewAccountName(e.target.value)} />
+                          <input type="url" placeholder="アイコン画像URL (空で自動生成)" className="w-full border rounded-lg p-2.5 text-sm bg-gray-50" value={newAccountAvatar} onChange={(e) => setNewAccountAvatar(e.target.value)} />
+                          <textarea placeholder="自己紹介" rows="2" className="w-full border rounded-lg p-2.5 text-sm bg-gray-50" value={newAccountBio} onChange={(e) => setNewAccountBio(e.target.value)} />
+                          <button type="submit" disabled={isSubmitting} className="w-full border font-semibold py-2.5 rounded-lg text-sm bg-white">{isSubmitting ? '作成中...' : 'アカウントを追加'}</button>
+                        </form>
+                      </div>
+                    </div>
+                  )}
+
+                  {currentTab === 'settings' && (
+                    <div className="p-4 bg-gray-50 min-h-full">
+                      <h2 className="text-xl font-bold mb-6 text-center">設定・データ同期</h2>
+                      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 space-y-4">
+                        <div>
+                          <h3 className="font-bold text-gray-800 mb-2">異なる端末間でデータを同期</h3>
+                          <p className="text-sm text-gray-600 mb-4">スマホなど他の端末でも同じデータを見たい場合は、Googleアカウントと連携してください。</p>
+                          {(!user || user?.isAnonymous) ? (
+                            <button onClick={handleGoogleAuth} className="w-full bg-white border border-gray-300 text-gray-800 font-bold py-3 rounded-lg flex items-center justify-center gap-2 shadow-sm">
+                              Googleアカウントで連携 / ログイン
+                            </button>
+                          ) : (
+                            <div className="p-3 bg-green-50 text-green-700 rounded-lg text-sm font-semibold border border-green-200">
+                              ✓ Googleアカウントで同期されています。<br/>他の端末でもログインすることでデータを共有できます。
+                            </div>
+                          )}
+                          {authMessage && <p className="text-sm mt-3 p-2 rounded bg-blue-50 text-blue-600">{authMessage}</p>}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </main>
+
+            <nav className="h-14 bg-white border-t border-gray-200 flex justify-around items-center px-2 z-10 shrink-0 absolute bottom-0 w-full">
+              <button onClick={() => { setCurrentTab('home'); setViewingProfileId(null); }} className={`p-2 ${currentTab === 'home' && !viewingProfileId ? 'text-black' : 'text-gray-400'}`}><Home className="w-7 h-7" /></button>
+              <button onClick={() => { setCurrentTab('newPost'); setViewingProfileId(null); }} className={`p-2 ${currentTab === 'newPost' && !viewingProfileId ? 'text-black' : 'text-gray-400'}`}><PlusSquare className="w-7 h-7" /></button>
+              <button onClick={() => { setCurrentTab('accounts'); setViewingProfileId(null); }} className={`p-2 ${currentTab === 'accounts' && !viewingProfileId ? 'text-black' : 'text-gray-400'}`}><Users className="w-7 h-7" /></button>
+              <button onClick={() => { setCurrentTab('settings'); setViewingProfileId(null); }} className={`p-2 ${currentTab === 'settings' && !viewingProfileId ? 'text-black' : 'text-gray-400'}`}><Settings className="w-7 h-7" /></button>
+            </nav>
+
+            {deleteTarget && (
+              <div className="absolute inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                <div className="bg-white rounded-xl w-full max-w-sm p-6 shadow-2xl">
+                  <h3 className="font-bold text-lg mb-2">確認</h3>
+                  <p className="text-gray-600 mb-6">{deleteTarget.type === 'post' ? 'この投稿を削除しますか？' : 'このアカウントを削除しますか？'}</p>
+                  <div className="flex gap-3 justify-end">
+                    <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-100 rounded-lg">キャンセル</button>
+                    <button onClick={executeDelete} className="px-4 py-2 text-sm font-semibold text-white bg-red-500 rounded-lg">削除する</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const root = createRoot(document.getElementById('root'));
+    root.render(<PrivateInstagram />);
+  </script>
+</body>
+</html>
